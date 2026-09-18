@@ -10,7 +10,7 @@ Processed images are stored in a separate S3 destination bucket and delivered gl
 
 ## Architecture
 
-![Serverless Image Processing Pipeline Architecture](./architecture-diagram.png)
+![Serverless Image Processing Pipeline Architecture](architecture/architecture-diagram.png)
 
 The architecture follows an **event-driven, asynchronous, and serverless design**.
 
