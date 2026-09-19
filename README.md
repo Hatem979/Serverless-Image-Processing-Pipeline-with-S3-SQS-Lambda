@@ -854,15 +854,6 @@ serverless-image-processing/
 │   ├── step-functions.png
 │   └── processing-result.png
 │
-├── lambda/
-│   ├── upload-url-generator/
-│   └── queue-processor/
-│
-├── step-functions/
-│   └── workflow.json
-│
-└── infrastructure/
-    └── README.md
 ```
 
 ---
