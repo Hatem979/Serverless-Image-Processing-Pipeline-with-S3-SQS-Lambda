@@ -887,7 +887,6 @@ Possible improvements include:
 * Add an actual watermarking step.
 * Split image processing into multiple Lambda functions.
 * Add Step Functions retry/catch policies.
-* Add failure notifications through SNS.
 * Implement Amazon Cognito authentication.
 * Add Terraform Infrastructure as Code.
 * Add CI/CD using GitHub Actions.
@@ -895,7 +894,6 @@ Possible improvements include:
 * Add automated testing.
 * Support multiple thumbnail sizes.
 * Add image format conversion.
-* Add S3 versioning and advanced lifecycle policies.
 
 ---
 
