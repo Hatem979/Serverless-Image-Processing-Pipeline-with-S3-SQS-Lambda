@@ -1,176 +1,158 @@
-# Serverless Image Processing Pipeline with S3, SQS & Lambda
+# Serverless Image Processing Pipeline
 
-A production-inspired serverless image processing pipeline built on AWS.
+> **Event-driven, resilient, and fully serverless image-processing architecture built with AWS managed services.**
 
-The system allows users to upload images securely using Amazon S3 pre-signed URLs. Uploaded images generate events that are decoupled through Amazon SQS before being processed asynchronously by AWS Lambda and orchestrated through AWS Step Functions.
-
-Processed images are stored in a separate S3 destination bucket and delivered globally through Amazon CloudFront. Amazon DynamoDB stores image metadata and processing status, while Amazon SNS provides success/failure notifications. Failed messages are isolated using an Amazon SQS Dead-Letter Queue (DLQ).
+![AWS](https://img.shields.io/badge/AWS-Cloud-orange)
+![Architecture](https://img.shields.io/badge/Architecture-Serverless-blue)
+![S3](https://img.shields.io/badge/Amazon%20S3-Storage-green)
+![Lambda](https://img.shields.io/badge/AWS%20Lambda-Compute-purple)
+![SQS](https://img.shields.io/badge/Amazon%20SQS-Messaging-red)
+![Step Functions](https://img.shields.io/badge/Step%20Functions-Orchestration-blue)
 
 ---
 
-## Architecture
+## Overview
 
-![Serverless Image Processing Pipeline Architecture](architecture/architecture-diagram.png)
+This project implements a **serverless image-processing pipeline on AWS**.
 
-The architecture follows an **event-driven, asynchronous, and serverless design**.
+Users upload images securely to an Amazon S3 source bucket using **pre-signed URLs**. S3 generates an event that is sent to an **Amazon SQS queue**, decoupling image uploads from the processing layer.
 
-### High-Level Flow
+An AWS Lambda function consumes messages from SQS and starts an **AWS Step Functions** workflow responsible for validating, resizing, watermarking, extracting metadata, and storing the processed image.
+
+Processed images are stored in a separate S3 destination bucket and delivered globally through **Amazon CloudFront**.
+
+Image metadata and processing status are stored in **Amazon DynamoDB**, while **Amazon SNS** is used for processing notifications. Failed messages are isolated using an **SQS Dead-Letter Queue (DLQ)**.
+
+---
+
+# Architecture
+
+![Serverless Image Processing Pipeline Architecture](./architecture/architecture-diagram.png)
+
+### Architecture Flow
 
 ```text
 User
-  │
-  ▼
+ │
+ ▼
 API Gateway
-  │
-  ▼
+ │
+ ▼
 Lambda
-  │
-  │ Generate Pre-signed URL
-  ▼
+ │
+ │ Generate Pre-signed URL
+ ▼
 S3 Source Bucket
-  │
-  │ ObjectCreated Event
-  ▼
+ │
+ │ ObjectCreated Event
+ ▼
 SQS Processing Queue
-  │
-  │ Lambda polls queue
-  ▼
-Lambda
-  │
-  ▼
+ │
+ ▼
+Lambda Queue Processor
+ │
+ ▼
 Step Functions
-  │
-  ├── Validate Image
-  ├── Resize Image
-  ├── Watermark Image
-  ├── Extract Metadata
-  ├── Store Processed Image
-  └── Update Processing Status
-           │
-           ├──────────► DynamoDB
-           │
-           └──────────► SNS
-                          │
-                          ├── Success Notification
-                          └── Failure Notification
-
-Failed SQS Messages
+ │
+ ├── Validate
+ ├── Resize
+ ├── Watermark
+ ├── Extract Metadata
+ ├── Store Result
+ └── Update Status
         │
-        ▼
-    SQS DLQ
-
-Processed Images
+        ├──────────────► DynamoDB
         │
-        ▼
+        └──────────────► SNS
+                             
 S3 Destination Bucket
-        │
-        ▼
+ │
+ ▼
 CloudFront
-        │
-        ▼
-      User
+ │
+ ▼
+User
+
+Failed Messages
+ │
+ ▼
+SQS Dead-Letter Queue
 ```
 
 ---
 
-# 1. Project Objectives
+# Why This Architecture?
 
-The main objective of this project is to design and implement a **scalable, resilient, and fully serverless image-processing architecture** using AWS managed services.
+A synchronous image-processing application can force users to wait for processing and can become difficult to scale when many images arrive simultaneously.
 
-The project demonstrates how multiple AWS services can work together to build an asynchronous event-driven application without managing servers.
-
-### Main objectives
-
-* Build an event-driven image-processing pipeline.
-* Secure image uploads using S3 pre-signed URLs.
-* Decouple image uploads from processing using Amazon SQS.
-* Process images asynchronously using AWS Lambda.
-* Orchestrate multiple processing steps using AWS Step Functions.
-* Store processed images in a dedicated S3 bucket.
-* Store image metadata and processing status in DynamoDB.
-* Handle processing failures using SQS retries and a Dead-Letter Queue.
-* Send completion/failure notifications through SNS.
-* Deliver processed images globally using CloudFront.
-* Apply S3 lifecycle policies for storage and cost optimization.
-* Apply least-privilege IAM permissions between AWS services.
-
----
-
-# 2. Why This Architecture?
-
-A simple image-processing application could process an uploaded image immediately.
-
-However, synchronous processing introduces several problems:
-
-* The user may need to wait for processing to finish.
-* A temporary processing failure can affect the upload request.
-* Large numbers of uploads can overload the processing layer.
-* There is no reliable buffer between uploads and processing.
-* Retry and failure handling become more difficult.
-
-This architecture solves these problems by introducing **asynchronous processing and decoupling**.
+This architecture separates **uploading** from **processing**.
 
 ```text
-User Upload
+Upload Rate
      │
      ▼
-S3
+    S3
      │
      ▼
-SQS
+    SQS
      │
      ▼
-Processing
+Processing Rate
 ```
 
-Amazon SQS acts as a buffer between the image-upload system and the processing system.
+SQS acts as a buffer between the upload and processing layers.
 
-This allows the processing layer to consume messages independently from the upload rate.
+This provides:
+
+* Loose coupling
+* Asynchronous processing
+* Automatic retries
+* Failure isolation
+* Better resilience
+* Independent scaling
+* Improved user experience
 
 ---
 
-# 3. End-to-End Request Flow
+# End-to-End Workflow
 
-## Step 1 — Request a Pre-signed URL
+## 1. Request Upload URL
 
-The user sends an upload request through API Gateway.
+The client sends a request to API Gateway.
 
 ```text
 User
-  │
-  ▼
+ ↓
 API Gateway
-  │
-  ▼
+ ↓
 Lambda
 ```
 
-The Lambda function generates a temporary S3 pre-signed URL.
+Lambda generates a temporary **S3 pre-signed URL**.
 
-The user can then upload the image directly to S3 without sending the image through API Gateway or Lambda.
+The client uses this URL to upload the image directly to S3.
 
-### Benefits
+### Why pre-signed URLs?
 
-* Secure temporary access to S3.
-* No AWS credentials are exposed to the user.
-* Large files do not need to pass through Lambda.
-* Reduces unnecessary API Gateway and Lambda traffic.
+* Keeps the S3 bucket private.
+* Provides temporary upload access.
+* Avoids sending image data through Lambda.
+* Reduces unnecessary API Gateway/Lambda traffic.
+* Separates authentication/API handling from object transfer.
 
 ---
 
-# 4. Image Upload to S3
+## 2. Upload Image to S3
 
-The image is uploaded directly to the **Source S3 Bucket** using the pre-signed URL.
+The image is uploaded directly to the source S3 bucket.
 
 ```text
 User
-  │
-  │ PUT image
-  ▼
+ │
+ │ PUT image
+ ▼
 S3 Source Bucket
 ```
-
-The source bucket is responsible for storing the original/raw images.
 
 Example:
 
@@ -182,266 +164,145 @@ source-bucket/
     └── image-003.jpg
 ```
 
-The bucket can use:
-
-* Block Public Access
-* Bucket policies
-* Encryption
-* Lifecycle rules
-* Event notifications
-* Versioning if required
-
-The source bucket should remain private.
+The source bucket is designed to remain private.
 
 ---
 
-# 5. S3 Event Notification
+## 3. S3 Event → SQS
 
-When a new image is uploaded, S3 generates an `ObjectCreated` event.
-
-```text
-S3 Source Bucket
-       │
-       │ ObjectCreated
-       ▼
-SQS Processing Queue
-```
-
-The event contains information about the uploaded object, such as:
-
-* Bucket name
-* Object key
-* Event type
-* Timestamp
-* Object information
-
-The event allows the processing pipeline to start automatically without polling S3.
-
----
-
-# 6. Amazon SQS — Decoupling Layer
-
-Amazon SQS is used as the messaging and buffering layer.
+When an image is uploaded, S3 generates an `ObjectCreated` event.
 
 ```text
 S3
  │
+ │ ObjectCreated
  ▼
-SQS
- │
- ▼
-Lambda
+SQS Processing Queue
 ```
+
+SQS provides the asynchronous messaging layer between S3 and the processing system.
 
 ### Why SQS?
 
-SQS provides:
+Instead of processing every upload immediately, messages are placed in a durable queue.
 
-* Decoupling
-* Asynchronous processing
-* Message buffering
-* Automatic retries
-* Failure isolation
-* Better resilience during traffic spikes
-
-For example, if 1,000 images are uploaded in a short period, the images do not all need to be processed simultaneously.
-
-Instead:
-
-```text
-1000 Images
-     │
-     ▼
-SQS Queue
-     │
-     ▼
-Lambda consumers
-     │
-     ▼
-Processing
-```
-
-The queue absorbs the temporary traffic spike.
+This allows the processing layer to consume messages independently from the upload rate.
 
 ---
 
-# 7. SQS Dead-Letter Queue
+## 4. SQS → Lambda
 
-A Dead-Letter Queue is configured to handle messages that repeatedly fail processing.
-
-Example:
-
-```text
-SQS Main Queue
-      │
-      │ Processing failure
-      ▼
-    Retry
-      │
-      ▼
-    Retry
-      │
-      ▼
-    Retry
-      │
-      │ maxReceiveCount exceeded
-      ▼
-    SQS DLQ
-```
-
-The DLQ prevents permanently failing messages from continuously being retried.
-
-Examples of possible failures:
-
-* Corrupted image
-* Unsupported image format
-* Lambda processing error
-* Missing object
-* Invalid metadata
-* Unexpected application error
-
-This improves the reliability and observability of the system.
-
----
-
-# 8. Lambda — Queue Processor
-
-A Lambda function is configured to consume messages from the SQS queue.
+Lambda polls the SQS queue and processes incoming messages.
 
 ```text
 SQS
  │
  ▼
 Lambda
- │
- ▼
-Step Functions
 ```
 
-The Lambda function retrieves the S3 object information from the SQS message and starts the corresponding Step Functions execution.
+The Lambda function retrieves the uploaded object's information and starts the corresponding Step Functions execution.
 
-This creates a clean separation between:
+This separates:
 
-**Message consumption**
-
-and
-
-**Image-processing workflow orchestration**
+```text
+Message Consumption
+        ≠
+Workflow Orchestration
+```
 
 ---
 
-# 9. AWS Step Functions
+## 5. Step Functions Workflow
 
-Step Functions orchestrates the image-processing workflow.
-
-Example workflow:
+AWS Step Functions orchestrates the image-processing workflow.
 
 ```text
 Start
-  │
-  ▼
+ │
+ ▼
 Validate Image
-  │
-  ▼
+ │
+ ▼
 Resize Image
-  │
-  ▼
+ │
+ ▼
 Watermark Image
-  │
-  ▼
+ │
+ ▼
 Extract Metadata
-  │
-  ▼
+ │
+ ▼
 Store Processed Image
-  │
-  ▼
+ │
+ ▼
 Update DynamoDB
-  │
-  ▼
+ │
+ ▼
 Success
 ```
 
-Step Functions is useful because the application contains multiple processing stages.
+Step Functions provides:
 
-Instead of implementing the entire workflow inside one large Lambda function, each logical step can be represented separately.
-
-### Benefits
-
-* Clear workflow visualization
-* Service orchestration
+* Workflow orchestration
+* Retry handling
 * Error handling
-* Retry policies
-* Conditional branching
-* Easier debugging
-* Better separation of responsibilities
+* Conditional logic
+* Execution history
+* Visual workflow monitoring
+* Separation between processing steps
 
 ---
 
-# 10. Image Processing with Lambda
+## 6. Image Processing
 
-Lambda performs the image-processing operations.
-
-The processing workflow can include:
+AWS Lambda performs the image-processing operations.
 
 ### Resize
 
-Generate a smaller version of the original image.
-
-Example:
+Creates a smaller version of the original image.
 
 ```text
-Original
 4000 × 3000
-
-       ↓
-
-Thumbnail
+     ↓
 800 × 600
 ```
 
 ### Watermark
 
-Apply a predefined watermark to the processed image.
+Adds a predefined watermark to the processed image.
 
 ### Metadata Extraction
 
-Extract information such as:
+Extracts information such as:
 
-* Width
-* Height
+* Image dimensions
 * Format
 * File size
 * Processing timestamp
 
 ---
 
-# 11. Lambda Layers
+## 7. Lambda Layers
 
-Image-processing libraries can significantly increase the Lambda deployment package size.
-
-To separate application code from dependencies, Lambda Layers can be used.
-
-Example:
+Image-processing libraries such as **Pillow** or **Sharp** can be packaged using Lambda Layers.
 
 ```text
-Lambda Function
+Lambda
 │
 ├── Application Code
 │
 └── Lambda Layer
-      │
-      └── Pillow / Sharp
+      └── Image Processing Dependencies
 ```
 
-This demonstrates how external dependencies can be packaged and reused.
-
-The exact image-processing library depends on the Lambda runtime and implementation language.
+This keeps application code separate from external dependencies and allows reusable dependency packages.
 
 ---
 
-# 12. Destination S3 Bucket
+## 8. Store Processed Image
 
-After processing is completed, the processed image is stored in a separate destination bucket.
+Processed images are stored in a separate destination S3 bucket.
 
 ```text
 Source Bucket
@@ -463,22 +324,57 @@ destination-bucket/
     └── image-002-thumbnail.jpg
 ```
 
-Separating raw and processed objects provides a cleaner architecture and makes it easier to apply different:
-
-* Access policies
-* Lifecycle policies
-* Storage classes
-* Retention rules
+Separating source and destination storage makes it easier to apply different access controls, lifecycle policies, and retention strategies.
 
 ---
 
-# 13. DynamoDB — Image Metadata
+# Failure Handling
+
+## SQS Retry + Dead-Letter Queue
+
+Processing failures are handled using SQS retry behavior and a Dead-Letter Queue.
+
+```text
+SQS Main Queue
+      │
+      ▼
+   Lambda
+      │
+      │ Failure
+      ▼
+    Retry
+      │
+      ▼
+    Retry
+      │
+      ▼
+    Retry
+      │
+      │ maxReceiveCount exceeded
+      ▼
+    SQS DLQ
+```
+
+Possible failure scenarios include:
+
+* Corrupted image
+* Unsupported image format
+* Lambda processing error
+* Missing S3 object
+* Invalid input
+* Unexpected application error
+
+The DLQ prevents permanently failing messages from being retried indefinitely.
+
+---
+
+# Metadata Management
 
 Amazon DynamoDB stores image metadata and processing status.
 
 Example item:
 
-```text
+```json
 {
   "imageId": "image-001",
   "fileName": "photo.jpg",
@@ -490,7 +386,7 @@ Example item:
 }
 ```
 
-Possible status values:
+Possible states:
 
 ```text
 UPLOADED
@@ -499,39 +395,23 @@ COMPLETED
 FAILED
 ```
 
-This allows the application to track the lifecycle of every image.
+This provides a persistent record of the processing lifecycle.
 
 ---
 
-# 14. Amazon SNS — Notifications
+# Notifications
 
-SNS is used to notify subscribers about processing results.
-
-```text
-Step Functions
-      │
-      ├── SUCCESS
-      │
-      ▼
-     SNS
-      │
-      ▼
-Notification
-```
-
-Failure events can follow a similar path.
+Amazon SNS is used to publish processing results.
 
 ```text
-Processing Failure
-       │
-       ▼
-      SNS
-       │
-       ▼
-Failure Notification
+Processing
+    │
+    ├── SUCCESS ──► SNS
+    │
+    └── FAILURE ──► SNS
 ```
 
-Possible notification:
+Example:
 
 ```text
 Image Processing Completed
@@ -543,9 +423,9 @@ Output: processed/image-001.jpg
 
 ---
 
-# 15. CloudFront — Global Content Delivery
+# Global Content Delivery
 
-CloudFront is placed in front of the processed-image S3 bucket.
+Amazon CloudFront is used to deliver processed images globally.
 
 ```text
 User
@@ -557,75 +437,42 @@ CloudFront
 S3 Destination Bucket
 ```
 
-CloudFront caches frequently requested images at edge locations.
+CloudFront provides:
 
-### Benefits
-
-* Lower latency for global users
-* Reduced direct requests to S3
-* Content caching
+* Edge caching
+* Lower latency
 * Global distribution
-* Better performance for frequently accessed images
+* Reduced repeated requests to the origin
 
-The destination S3 bucket should remain private, with access controlled through the CloudFront architecture rather than making the bucket publicly accessible.
-
----
-
-# 16. S3 Lifecycle Management
-
-Lifecycle rules can automatically manage object storage over time.
-
-Example:
-
-```text
-New Object
-    │
-    ▼
-S3 Standard
-    │
-    │ After X days
-    ▼
-Infrequent Access
-    │
-    │ After Y days
-    ▼
-Expiration / Deletion
-```
-
-Lifecycle policies can be configured differently for:
-
-* Original images
-* Processed images
-* Temporary objects
-
-This helps reduce long-term storage costs.
+The S3 destination bucket is kept private and access is controlled through the CloudFront architecture.
 
 ---
 
-# 17. Security Design
+# Security
 
-Security is implemented using AWS managed security controls.
+Security is based on AWS managed controls and the **Principle of Least Privilege**.
 
 ### S3
 
 * Block Public Access
+* Private buckets
 * Bucket policies
 * Encryption at rest
-* Pre-signed URLs for temporary uploads
+* Pre-signed URLs for temporary access
 
 ### IAM
 
-Each Lambda function should have only the permissions it needs.
+Each component receives only the permissions required for its role.
 
-For example:
+Example:
 
 ```text
 Upload Lambda
- └── Permission to generate S3 upload URLs
+ └── Generate S3 pre-signed upload URLs
 
-Processing Lambda
- └── Permission to read required SQS messages
- └── Permission to start Step Functions
+Queue Processor
+ ├── Consume SQS messages
+ └── Start Step Functions executions
 
 Processing Workflow
  ├── Read source S3 objects
@@ -633,170 +480,151 @@ Processing Workflow
  └── Update DynamoDB
 
 Notification Component
- └── Permission to publish to SNS
+ └── Publish to SNS
 ```
-
-This follows the **Principle of Least Privilege**.
 
 ---
 
-# 18. Reliability and Fault Tolerance
+# S3 Lifecycle Management
 
-The architecture uses multiple mechanisms to improve reliability.
-
-### SQS Buffering
-
-Protects the processing layer from sudden traffic spikes.
-
-### Automatic Retries
-
-Failed processing can be retried.
-
-### Dead-Letter Queue
-
-Messages that repeatedly fail are isolated.
-
-### Step Functions Error Handling
-
-Individual workflow steps can have retry and catch behavior.
+Lifecycle policies can automatically manage object storage over time.
 
 Example:
 
 ```text
-Resize
-  │
-  ├── Success → Continue
-  │
-  └── Failure
-        │
-        ├── Retry
-        │
-        └── Catch → Failure Handling
+S3 Standard
+     │
+     │ After X days
+     ▼
+Infrequent Access
+     │
+     │ After Y days
+     ▼
+Expiration
 ```
 
-### Separate S3 Buckets
+Different lifecycle rules can be applied to:
 
-Raw and processed objects are isolated from each other.
+* Original images
+* Processed images
+* Temporary objects
+
+This helps optimize long-term storage costs.
 
 ---
 
-# 19. Scalability
+# Scalability
 
-The architecture is designed to scale without manually managing servers.
+The architecture is designed to handle variable workloads using managed AWS services.
+
+A sudden increase in uploads does not require the processing layer to immediately process every image.
 
 ```text
-More Uploads
-     │
-     ▼
-S3
-     │
-     ▼
-SQS Queue
-     │
-     ▼
-Lambda
-     │
-     ▼
+High Upload Volume
+       │
+       ▼
+      S3
+       │
+       ▼
+      SQS
+       │
+       ▼
+Lambda Consumers
+       │
+       ▼
 Step Functions
 ```
 
-SQS provides buffering while Lambda can process messages according to the available concurrency.
-
-The architecture therefore separates:
-
-```text
-Upload Rate
-     ≠
-Processing Rate
-```
-
-This is one of the key advantages of asynchronous event-driven systems.
+The queue absorbs temporary traffic spikes while the processing layer consumes messages asynchronously.
 
 ---
 
-# 20. Observability
+# Observability
 
-The system can be monitored using AWS monitoring and logging services.
-
-Useful metrics and logs include:
+The system can be monitored using Amazon CloudWatch and the native monitoring capabilities of the AWS services.
 
 ### Lambda
 
-* Invocation count
-* Duration
+* Invocations
 * Errors
+* Duration
 * Throttles
-* Concurrent executions
+* Concurrency
 
 ### SQS
 
-* Approximate number of messages visible
-* Message age
 * Messages sent
 * Messages received
+* Messages visible
+* Message age
 
 ### Step Functions
 
 * Successful executions
 * Failed executions
-* Execution history
 * Execution duration
+* Execution history
 
 ### DynamoDB
 
 * Read/write activity
-* Throttling
 * Consumed capacity
+* Throttling
 
-CloudWatch Logs can be used to troubleshoot Lambda processing errors.
+CloudWatch Logs can be used to investigate application and processing errors.
 
 ---
 
-# 21. Testing the Architecture
+# Testing
 
-The pipeline can be tested using the following scenario.
+## Successful Processing
 
-### Test 1 — Successful Processing
-
-1. Request a pre-signed URL through API Gateway.
-2. Upload an image to the source S3 bucket.
-3. Verify the S3 event.
-4. Verify that an SQS message is created.
-5. Verify that Lambda receives the message.
-6. Verify Step Functions execution.
-7. Verify image processing.
-8. Verify the processed image in the destination bucket.
-9. Verify DynamoDB status becomes `COMPLETED`.
-10. Verify SNS success notification.
-11. Access the processed image through CloudFront.
-
-Expected result:
+The expected successful flow is:
 
 ```text
-UPLOAD
-  ↓
-S3
-  ↓
+Request Pre-signed URL
+        ↓
+Upload Image
+        ↓
+S3 Source Bucket
+        ↓
+S3 Event
+        ↓
 SQS
-  ↓
+        ↓
 Lambda
-  ↓
+        ↓
 Step Functions
-  ↓
-Processed S3 Object
-  ↓
+        ↓
+Image Processing
+        ↓
+S3 Destination Bucket
+        ↓
 DynamoDB = COMPLETED
-  ↓
-SNS = SUCCESS
-  ↓
+        ↓
+SNS Notification
+        ↓
 CloudFront
 ```
 
+### Validation
+
+The following should be verified:
+
+* Image appears in the source bucket.
+* SQS receives the event.
+* Lambda receives the message.
+* Step Functions execution succeeds.
+* Processed image appears in the destination bucket.
+* DynamoDB status becomes `COMPLETED`.
+* SNS sends the expected notification.
+* Processed image is accessible through CloudFront.
+
 ---
 
-## Test 2 — Processing Failure
+## Failure Testing
 
-Intentionally provide an invalid or unsupported image.
+An invalid or unsupported image can be used to test failure handling.
 
 Expected behavior:
 
@@ -815,88 +643,91 @@ Retry
  ↓
 Retry
  ↓
-DLQ
+SQS DLQ
 ```
 
-The failure should also be recorded in the application's status/notification flow.
+This validates the retry and failure-isolation design.
 
 ---
 
-# 22. AWS Services Used
+# AWS Services
 
-| Service                | Purpose                                          |
-| ---------------------- | ------------------------------------------------ |
-| **Amazon S3**          | Store original and processed images              |
-| **Amazon SQS**         | Decouple upload events from processing           |
-| **Amazon SQS DLQ**     | Handle repeatedly failed messages                |
-| **AWS Lambda**         | Serverless image processing and request handling |
-| **AWS Lambda Layers**  | Package image-processing dependencies            |
-| **AWS Step Functions** | Orchestrate the multi-step workflow              |
-| **Amazon API Gateway** | Expose the upload API                            |
-| **Amazon DynamoDB**    | Store image metadata and processing status       |
-| **Amazon SNS**         | Send processing notifications                    |
-| **Amazon CloudFront**  | Globally deliver processed images                |
-| **AWS IAM**            | Control service-to-service permissions           |
-| **Amazon CloudWatch**  | Logs, metrics, and monitoring                    |
+| AWS Service            | Role                                    |
+| ---------------------- | --------------------------------------- |
+| **Amazon S3**          | Source and destination object storage   |
+| **Amazon SQS**         | Asynchronous message queue              |
+| **Amazon SQS DLQ**     | Failed-message isolation                |
+| **AWS Lambda**         | Serverless compute and image processing |
+| **Lambda Layers**      | Image-processing dependencies           |
+| **AWS Step Functions** | Workflow orchestration                  |
+| **Amazon API Gateway** | Upload API / pre-signed URL endpoint    |
+| **Amazon DynamoDB**    | Image metadata and processing status    |
+| **Amazon SNS**         | Success/failure notifications           |
+| **Amazon CloudFront**  | Global content delivery                 |
+| **AWS IAM**            | Identity and access management          |
+| **Amazon CloudWatch**  | Monitoring and logging                  |
 
 ---
 
-# 23. Key Architecture Concepts Demonstrated
+# Architecture Principles Demonstrated
 
-This project demonstrates several important AWS architecture concepts:
+This project demonstrates practical implementation of:
 
 * Event-driven architecture
 * Serverless architecture
 * Asynchronous processing
 * Loose coupling
-* Message queuing
+* Queue-based buffering
 * Retry mechanisms
 * Dead-Letter Queues
 * Workflow orchestration
 * Object storage
 * CDN and edge caching
-* No-server infrastructure
-* Least-privilege IAM
 * Pre-signed URLs
+* Least-privilege IAM
 * Lifecycle management
 * Failure isolation
 * Horizontal scalability
 
 ---
 
-# 24. Architecture Benefits
+# Screenshots
 
-### Scalability
+The following screenshots document key parts of the AWS implementation.
 
-The architecture can handle variable workloads using managed AWS services.
+## S3 Event Notification
 
-### Resilience
+Demonstrates the connection between the source S3 bucket and the SQS processing queue.
 
-SQS buffering, retries, DLQ, and Step Functions error handling improve failure recovery.
-
-### Decoupling
-
-The upload system does not need to wait for image processing to complete.
-
-### Security
-
-Images remain private and users receive temporary access through pre-signed URLs.
-
-### Cost Efficiency
-
-The architecture uses serverless services where resources are consumed on demand.
-
-### Maintainability
-
-The image-processing workflow is separated into logical components instead of one large application.
-
-### Global Performance
-
-CloudFront caches processed images closer to users around the world.
+![S3 Event Notification](./screenshots/s3-event.png)
 
 ---
 
-# 25. Project Structure
+## SQS and Dead-Letter Queue
+
+Demonstrates the processing queue, retry configuration, and DLQ.
+
+![SQS and DLQ](./screenshots/sqs-dlq.png)
+
+---
+
+## Step Functions Workflow
+
+Demonstrates the deployed image-processing workflow.
+
+![Step Functions Workflow](./screenshots/step-functions.png)
+
+---
+
+## Successful Processing Result
+
+Demonstrates that an image successfully passed through the processing pipeline and was stored in the destination bucket.
+
+![Successful Processing](./screenshots/processing-result.png)
+
+---
+
+# Project Structure
 
 ```text
 serverless-image-processing/
@@ -906,6 +737,12 @@ serverless-image-processing/
 ├── architecture/
 │   └── architecture-diagram.png
 │
+├── screenshots/
+│   ├── s3-event.png
+│   ├── sqs-dlq.png
+│   ├── step-functions.png
+│   └── processing-result.png
+│
 ├── lambda/
 │   ├── upload-url-generator/
 │   └── queue-processor/
@@ -913,260 +750,99 @@ serverless-image-processing/
 ├── step-functions/
 │   └── image-processing-workflow.json
 │
-├── infrastructure/
-│   └── README.md
-│
-└── screenshots/
-    ├── s3-event.png
-    ├── sqs-dlq.png
-    ├── step-functions.png
-    └── processing-result.png
+└── infrastructure/
+    └── README.md
 ```
 
 ---
 
-# 26. AWS Console Implementation Screenshots
+# Cost Considerations
 
-The following screenshots document the actual implementation of the architecture in the AWS Console.
+This project is designed primarily around AWS serverless and managed services.
 
-## 1. S3 Event Notification
+For development and testing, the workload should be kept small and AWS Free Tier usage should be monitored.
 
-This screenshot demonstrates the connection between the source S3 bucket and the SQS processing queue.
+Cost-control practices include:
 
-![S3 Event Notification](./screenshots/s3-event.png)
+* Using small test images
+* Limiting test executions
+* Monitoring Lambda usage
+* Monitoring Step Functions state transitions
+* Monitoring S3 storage
+* Applying S3 lifecycle rules
+* Avoiding unnecessary CloudFront traffic
+* Deleting resources that are no longer required
+* Monitoring AWS Billing and Free Tier usage
 
-**Demonstrates:**
+> AWS Free Tier limits and eligibility can change. Always verify current pricing and Free Tier terms before deployment.
+
+---
+
+# Key Learning Outcomes
+
+This project provided hands-on experience with designing a complete event-driven serverless architecture.
+
+### Technical
+
+* Amazon S3 event notifications
+* SQS queues and DLQs
+* Lambda functions and Layers
+* Step Functions workflows
+* DynamoDB data modeling
+* API Gateway integrations
+* SNS notifications
+* CloudFront distribution
+* IAM permissions
+* S3 lifecycle policies
+* CloudWatch monitoring
+
+### Architecture
+
+The main architectural lesson is understanding **why each service is used and how the services work together**, rather than learning the services independently.
 
 ```text
-S3 ObjectCreated
-       ↓
-SQS
+Requirement
+     │
+     ├── Object Storage ───────► S3
+     ├── Async Messaging ──────► SQS
+     ├── Serverless Compute ───► Lambda
+     ├── Workflow ─────────────► Step Functions
+     ├── Metadata ─────────────► DynamoDB
+     ├── Notifications ───────► SNS
+     └── Global Delivery ──────► CloudFront
 ```
 
 ---
 
-## 2. SQS Queue and Dead-Letter Queue
+# Future Improvements
 
-This screenshot demonstrates the main processing queue, DLQ configuration, and retry/failure handling.
+Possible future improvements include:
 
-![SQS and DLQ](./screenshots/sqs-dlq.png)
-
-**Demonstrates:**
-
-```text
-SQS Main Queue
-      ↓
-Retries
-      ↓
-SQS DLQ
-```
-
----
-
-## 3. Step Functions Workflow
-
-This screenshot demonstrates the actual image-processing workflow deployed in AWS.
-
-![Step Functions Workflow](./screenshots/step-functions.png)
-
-**Demonstrates:**
-
-```text
-Validate
-   ↓
-Resize
-   ↓
-Watermark
-   ↓
-Store
-   ↓
-Update Metadata
-```
-
----
-
-## 4. Successful Processing Result
-
-This screenshot demonstrates the final result of the pipeline, showing that an uploaded image was successfully processed and stored in the destination S3 bucket.
-
-![Processing Result](./screenshots/processing-result.png)
-
-**Demonstrates the complete flow:**
-
-```text
-Upload
-  ↓
-S3
-  ↓
-SQS
-  ↓
-Lambda
-  ↓
-Step Functions
-  ↓
-Destination S3
-```
-
----
-
-# 27. Cost Considerations
-
-The project is designed around AWS serverless services and can be tested with relatively small workloads.
-
-For a learning project, usage should be kept low to remain within applicable AWS Free Tier limits.
-
-To control costs:
-
-* Use a small number of test images.
-* Avoid unnecessary large image files.
-* Monitor S3 storage.
-* Monitor Lambda execution.
-* Monitor Step Functions state transitions.
-* Avoid unnecessary CloudFront usage.
-* Delete resources that are no longer required.
-* Configure S3 lifecycle rules where appropriate.
-* Monitor AWS Billing and Free Tier usage.
-
-**Important:** AWS Free Tier availability and limits can change, so the current AWS pricing and Free Tier documentation should be checked before deploying the project.
-
----
-
-# 28. What I Learned
-
-Through this project, I gained practical experience designing and implementing a serverless event-driven architecture on AWS.
-
-### Technical Skills
-
-* Designing serverless architectures
-* Working with Amazon S3 events
-* Implementing SQS-based decoupling
-* Configuring SQS retries and DLQs
-* Building Lambda-based processing
-* Using Lambda Layers
-* Designing Step Functions workflows
-* Working with DynamoDB
-* Implementing API Gateway integrations
-* Using SNS notifications
-* Configuring CloudFront
-* Applying IAM least-privilege principles
-* Implementing S3 lifecycle policies
-* Troubleshooting distributed serverless workflows
-
-### Architecture Skills
-
-More importantly, the project demonstrates how to choose AWS services based on architectural requirements rather than using services independently.
-
-For example:
-
-```text
-Need asynchronous processing?
-        ↓
-      SQS
-
-Need workflow orchestration?
-        ↓
-  Step Functions
-
-Need serverless compute?
-        ↓
-      Lambda
-
-Need object storage?
-        ↓
-       S3
-
-Need global content delivery?
-        ↓
-    CloudFront
-
-Need metadata storage?
-        ↓
-    DynamoDB
-
-Need failure isolation?
-        ↓
-      DLQ
-```
-
----
-
-# 29. Final Architecture
-
-The final solution combines managed AWS services into an event-driven processing pipeline:
-
-```text
-                         ┌─────────────────┐
-                         │      User       │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │  API Gateway    │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │     Lambda      │
-                         │ Pre-signed URL  │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │   S3 Source     │
-                         │  Raw Images     │
-                         └────────┬────────┘
-                                  │
-                            S3 Event
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │      SQS        │
-                         │ Processing Queue │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │     Lambda      │
-                         │ Queue Processor │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                    ┌──────────────────────────┐
-                    │     Step Functions      │
-                    │                          │
-                    │ Validate → Resize        │
-                    │      → Watermark         │
-                    │      → Metadata          │
-                    │      → Store             │
-                    └────────────┬─────────────┘
-                                 │
-                  ┌──────────────┼──────────────┐
-                  ▼              ▼              ▼
-             S3 Destination  DynamoDB         SNS
-             Processed Image  Metadata      Notification
-                  │
-                  ▼
-             CloudFront
-                  │
-                  ▼
-                User
-
-
-          Processing Failures
-                  │
-                  ▼
-                SQS DLQ
-```
+* Infrastructure as Code using Terraform
+* CI/CD deployment using GitHub Actions
+* Automated image format conversion
+* Multiple thumbnail sizes
+* Authentication using Amazon Cognito
+* API request authorization
+* More advanced Step Functions error handling
+* CloudWatch dashboards and alarms
+* Automated testing
+* Object versioning
+* Additional S3 lifecycle strategies
 
 ---
 
 # Conclusion
 
-This project demonstrates a complete serverless image-processing pipeline using AWS managed services.
+This project demonstrates a complete **event-driven serverless image-processing architecture on AWS**.
 
-The architecture combines **event-driven design, asynchronous processing, workflow orchestration, failure handling, secure object storage, metadata management, notifications, and global content delivery**.
+The system separates image uploading, messaging, processing, storage, metadata management, notification, and content delivery into independent components.
 
-The key architectural principle is to keep the components loosely coupled:
+The resulting architecture provides:
+
+**Scalability + Resilience + Decoupling + Security + Serverless Operations + Global Content Delivery**
+
+The main architectural pattern can be summarized as:
 
 ```text
 Upload
@@ -1175,11 +851,23 @@ Event
   ↓
 Queue
   ↓
-Processing
+Process
   ↓
-Storage
+Store
   ↓
-Delivery
+Deliver
 ```
 
-This allows each component to scale and fail independently while maintaining a resilient and maintainable architecture.
+---
+
+## Author
+
+**Hatem Nasser Fathey Alsayed**
+
+Cloud & Infrastructure Engineering Portfolio
+
+---
+
+## Disclaimer
+
+This project is intended for educational and portfolio purposes. AWS service availability, pricing, and Free Tier limits may change over time.
